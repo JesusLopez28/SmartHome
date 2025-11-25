@@ -7,9 +7,19 @@
 #define PIR_SENSOR_PIN 13  // Cambia este pin según tu conexión
 #define LED_FLASH_PIN 12   // LED flash de la cámara (GPIO 12)
 
-// Variable para evitar múltiples capturas
+// ===========================
+// Configuración del sensor Ultrasónico
+// ===========================
+#define TRIG_PIN 14        // Pin Trigger del sensor ultrasónico
+#define ECHO_PIN 15        // Pin Echo del sensor ultrasónico
+#define RELAY_PIN 2        // Pin del relé para controlar el foco
+#define DISTANCE_THRESHOLD 100  // Distancia en cm para activar el foco (ajustable)
+
+// Variables para evitar múltiples capturas
 unsigned long lastCaptureTime = 0;
 const unsigned long CAPTURE_INTERVAL = 3000; // 3 segundos entre capturas
+unsigned long lastUltrasonicCheck = 0;
+const unsigned long ULTRASONIC_CHECK_INTERVAL = 500; // Revisar cada 500ms
 
 void setup() {
   Serial.begin(115200);
@@ -18,6 +28,14 @@ void setup() {
 
   // Configurar pin del sensor PIR
   pinMode(PIR_SENSOR_PIN, INPUT);
+  
+  // Configurar pines del sensor ultrasónico
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  
+  // Configurar pin del relé (inicialmente apagado)
+  pinMode(RELAY_PIN, OUTPUT);
+  digitalWrite(RELAY_PIN, LOW); // LOW = relé apagado (foco apagado)
   
   // Configurar LED flash (asegurarse que esté apagado)
   pinMode(LED_FLASH_PIN, OUTPUT);
@@ -34,6 +52,7 @@ void setup() {
   }
 
   Serial.println("Sistema listo. Esperando detección de movimiento...");
+  Serial.printf("Sensor ultrasónico configurado. Distancia de activación: %d cm\n", DISTANCE_THRESHOLD);
 }
 
 void loop() {
@@ -58,6 +77,32 @@ void loop() {
       // Pausa para evitar múltiples capturas seguidas
       delay(500);
     }
+  }
+
+  // Verificar sensor ultrasónico periódicamente
+  unsigned long currentTime = millis();
+  if (currentTime - lastUltrasonicCheck >= ULTRASONIC_CHECK_INTERVAL) {
+    float distance = getDistance();
+    
+    if (distance > 0 && distance <= DISTANCE_THRESHOLD) {
+      // Objeto detectado cerca - encender foco
+      digitalWrite(RELAY_PIN, HIGH);
+      Serial.printf("💡 OBJETO DETECTADO a %.1f cm - Foco ENCENDIDO\n", distance);
+    } else {
+      // No hay objeto cerca - apagar foco
+      digitalWrite(RELAY_PIN, LOW);
+      // Solo imprimir cuando cambie el estado para no saturar el Serial
+      static bool wasOn = false;
+      if (wasOn) {
+        Serial.println("💡 Foco APAGADO");
+        wasOn = false;
+      }
+      if (distance > 0 && distance <= DISTANCE_THRESHOLD) {
+        wasOn = true;
+      }
+    }
+    
+    lastUltrasonicCheck = currentTime;
   }
 
   delay(100); // Pequeño delay para no saturar el loop
@@ -169,4 +214,29 @@ void capturePhoto() {
 
   // Liberar memoria del frame buffer
   esp_camera_fb_return(fb);
+}
+
+float getDistance() {
+  // Limpiar el pin trigger
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  
+  // Enviar pulso de 10 microsegundos
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+  
+  // Leer el tiempo de respuesta del pin echo
+  long duration = pulseIn(ECHO_PIN, HIGH, 30000); // Timeout de 30ms
+  
+  // Calcular distancia en centímetros
+  // Velocidad del sonido: 343 m/s = 0.0343 cm/µs
+  // Distancia = (tiempo * velocidad) / 2
+  if (duration == 0) {
+    return -1; // Error o fuera de rango
+  }
+  
+  float distance = duration * 0.0343 / 2;
+  
+  return distance;
 }
