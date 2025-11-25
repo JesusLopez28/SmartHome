@@ -5,12 +5,11 @@
 // Configuración del sensor PIR
 // ===========================
 #define PIR_SENSOR_PIN 13  // Cambia este pin según tu conexión
-#define LED_BUILTIN 4      // LED flash de la cámara
+#define LED_FLASH_PIN 12   // LED flash de la cámara (GPIO 12)
 
-// Variables globales
-bool motionDetected = false;
+// Variable para evitar múltiples capturas
 unsigned long lastCaptureTime = 0;
-const unsigned long CAPTURE_INTERVAL = 15000; // 15 segundos entre capturas
+const unsigned long CAPTURE_INTERVAL = 3000; // 3 segundos entre capturas
 
 void setup() {
   Serial.begin(115200);
@@ -20,9 +19,13 @@ void setup() {
   // Configurar pin del sensor PIR
   pinMode(PIR_SENSOR_PIN, INPUT);
   
-  // Configurar LED
-  pinMode(LED_BUILTIN, OUTPUT);
-  digitalWrite(LED_BUILTIN, LOW);
+  // Configurar LED flash (asegurarse que esté apagado)
+  pinMode(LED_FLASH_PIN, OUTPUT);
+  digitalWrite(LED_FLASH_PIN, LOW); // LOW = apagado, HIGH = encendido
+  
+  // Pequeña pausa para estabilizar el sensor PIR
+  Serial.println("Esperando estabilización del sensor PIR (2 segundos)...");
+  delay(2000);
 
   // Configurar cámara
   if (!initCamera()) {
@@ -36,14 +39,27 @@ void setup() {
 void loop() {
   // Leer sensor PIR
   int pirState = digitalRead(PIR_SENSOR_PIN);
-  
-  // Verificar si hay movimiento
-  if (pirState == HIGH) {
-    Serial.println("\n¡MOVIMIENTO DETECTADO! Capturando foto...");
-    capturePhoto();
-    delay(1000); // Pequeña pausa después de capturar
+
+  // Verificar si hay movimiento (LOW = movimiento detectado en tu sensor)
+  // Tu sensor funciona de manera invertida: LED IR encendido = movimiento = LOW
+  if (pirState == LOW) {
+    unsigned long currentTime = millis();
+    
+    // Verificar que haya pasado suficiente tiempo desde la última captura
+    if (currentTime - lastCaptureTime >= CAPTURE_INTERVAL) {
+      Serial.println("\n¡MOVIMIENTO DETECTADO! (LED IR encendido) Capturando foto...");
+      
+      // Capturar foto con flash
+      capturePhoto();
+      
+      // Actualizar tiempo de última captura
+      lastCaptureTime = currentTime;
+      
+      // Pausa para evitar múltiples capturas seguidas
+      delay(500);
+    }
   }
-  
+
   delay(100); // Pequeño delay para no saturar el loop
 }
 
@@ -123,18 +139,29 @@ bool initCamera() {
 }
 
 void capturePhoto() {
-  // Encender LED flash
-  digitalWrite(LED_BUILTIN, HIGH);
-  delay(150); // Tiempo para que el LED ilumine
-  
+  // Animación de flash: parpadeo rápido antes de la foto
+  for (int i = 0; i < 3; i++) {
+    digitalWrite(LED_FLASH_PIN, HIGH);
+    delay(80);
+    digitalWrite(LED_FLASH_PIN, LOW);
+    delay(80);
+  }
+  Serial.println("⚡ Animación de flash realizada");
+
+  // Encender LED flash para iluminar la escena
+  digitalWrite(LED_FLASH_PIN, HIGH);
+  Serial.println("⚡ Flash encendido");
+  delay(220); // Tiempo para que el LED ilumine bien la escena
+
   // Capturar imagen
   camera_fb_t *fb = esp_camera_fb_get();
-  
-  // Apagar LED
-  digitalWrite(LED_BUILTIN, LOW);
-  
+
+  // Apagar LED flash inmediatamente
+  digitalWrite(LED_FLASH_PIN, LOW);
+  Serial.println("⚡ Flash apagado");
+
   if (!fb) {
-    Serial.println("Error al capturar imagen");
+    Serial.println("❌ Error al capturar imagen");
     return;
   }
 
