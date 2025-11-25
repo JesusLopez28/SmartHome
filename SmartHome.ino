@@ -15,6 +15,11 @@
 #define RELAY_PIN 2        // Pin del relé para controlar el foco
 #define DISTANCE_THRESHOLD 100  // Distancia en cm para activar el foco (ajustable)
 
+// ===========================
+// Configuración de la Fotorresistencia
+// ===========================
+#define LDR_PIN 33        // Pin de la fotorresistencia (LDR)
+
 // Variables para evitar múltiples capturas
 unsigned long lastCaptureTime = 0;
 const unsigned long CAPTURE_INTERVAL = 3000; // 3 segundos entre capturas
@@ -36,6 +41,9 @@ void setup() {
   // Configurar pin del relé (inicialmente apagado)
   pinMode(RELAY_PIN, OUTPUT);
   digitalWrite(RELAY_PIN, LOW); // LOW = relé apagado (foco apagado)
+  
+  // Configurar pin de la fotorresistencia
+  pinMode(LDR_PIN, INPUT);
   
   // Configurar LED flash (asegurarse que esté apagado)
   pinMode(LED_FLASH_PIN, OUTPUT);
@@ -84,21 +92,35 @@ void loop() {
   if (currentTime - lastUltrasonicCheck >= ULTRASONIC_CHECK_INTERVAL) {
     float distance = getDistance();
     
-    if (distance > 0 && distance <= DISTANCE_THRESHOLD) {
-      // Objeto detectado cerca - encender foco
-      digitalWrite(RELAY_PIN, HIGH);
-      Serial.printf("💡 OBJETO DETECTADO a %.1f cm - Foco ENCENDIDO\n", distance);
-    } else {
-      // No hay objeto cerca - apagar foco
+    // Leer estado de la fotorresistencia
+    int ldrState = digitalRead(LDR_PIN);
+    
+    // Si la fotorresistencia detecta luz (LOW), apagar el foco
+    if (ldrState == LOW) {
       digitalWrite(RELAY_PIN, LOW);
-      // Solo imprimir cuando cambie el estado para no saturar el Serial
-      static bool wasOn = false;
-      if (wasOn) {
-        Serial.println("💡 Foco APAGADO");
-        wasOn = false;
+      static bool wasForcedOff = false;
+      if (!wasForcedOff) {
+        Serial.println("☀️ Luz detectada (fotorresistencia) - Foco APAGADO");
+        wasForcedOff = true;
       }
+    } else {
+      // Si no hay luz ambiente, usar el sensor ultrasónico para controlar el foco
       if (distance > 0 && distance <= DISTANCE_THRESHOLD) {
-        wasOn = true;
+        // Objeto detectado cerca - encender foco
+        digitalWrite(RELAY_PIN, HIGH);
+        Serial.printf("💡 OBJETO DETECTADO a %.1f cm - Foco ENCENDIDO\n", distance);
+      } else {
+        // No hay objeto cerca - apagar foco
+        digitalWrite(RELAY_PIN, LOW);
+        // Solo imprimir cuando cambie el estado para no saturar el Serial
+        static bool wasOn = false;
+        if (wasOn) {
+          Serial.println("💡 Foco APAGADO");
+          wasOn = false;
+        }
+        if (distance > 0 && distance <= DISTANCE_THRESHOLD) {
+          wasOn = true;
+        }
       }
     }
     
