@@ -2,12 +2,21 @@
 #include "board_config.h"
 #include <WiFi.h>
 #include "time.h"
+#include <HTTPClient.h>
+#include "base64.h"
 
 // ===========================
 // Configuración WiFi
 // ===========================
 const char* ssid = "Totalplay-B7A2";        
-const char* password = "bza8g=M1eiAc0a1";     
+const char* password = "bza8g=M1eiAc0a1";
+
+// ===========================
+// Configuración Firebase
+// ===========================
+const char* firebaseHost = "https://smarthome-4d3c6-default-rtdb.firebaseio.com";
+const char* firebaseAuth = "AIzaSyDDrOCcoZbBVXCFfImSrJyfBFjCGMNOj98";
+const char* deviceId = "camara1";
 
 // Configuración de zona horaria
 const char* ntpServer = "pool.ntp.org";
@@ -32,6 +41,9 @@ const int daylightOffset_sec = 0;   // Sin horario de verano
 // Configuración de la Fotorresistencia
 // ===========================
 #define LDR_PIN 33        // Pin de la fotorresistencia (LDR)
+
+// Prototipo de función para evitar error de declaración
+void sendSensorEvent(String sensorType, String event, float value = 0);
 
 // Variables para evitar múltiples capturas
 unsigned long lastCaptureTime = 0;
@@ -114,8 +126,11 @@ void loop() {
       printLocalTime();
       Serial.println("] ¡MOVIMIENTO DETECTADO! (LED IR encendido) Capturando foto...");
       
-      // Capturar foto con flash
-      capturePhoto();
+      // Enviar evento de movimiento a Firebase
+      sendSensorEvent("PIR", "movimiento_detectado");
+      
+      // Capturar foto con flash y enviar a Firebase
+      capturePhotoAndSend();
       
       // Actualizar tiempo de última captura
       lastCaptureTime = currentTime;
@@ -141,16 +156,22 @@ void loop() {
         Serial.print("[");
         printLocalTime();
         Serial.println("] ☀️ Luz detectada (fotorresistencia) - Foco APAGADO");
+        sendSensorEvent("LDR", "luz_detectada_foco_apagado");
         wasForcedOff = true;
       }
     } else {
       // Si no hay luz ambiente, usar el sensor ultrasónico para controlar el foco
       if (distance > 0 && distance <= DISTANCE_THRESHOLD) {
         // Objeto detectado cerca - encender foco
-        digitalWrite(RELAY_PIN, HIGH);
-        Serial.print("[");
-        printLocalTime();
-        Serial.printf("] 💡 OBJETO DETECTADO a %.1f cm - Foco ENCENDIDO\n", distance);
+        static bool wasOffBefore = true;
+        if (wasOffBefore) {
+          digitalWrite(RELAY_PIN, HIGH);
+          Serial.print("[");
+          printLocalTime();
+          Serial.printf("] 💡 OBJETO DETECTADO a %.1f cm - Foco ENCENDIDO\n", distance);
+          sendSensorEvent("Ultrasonico", "objeto_detectado_foco_encendido", distance);
+          wasOffBefore = false;
+        }
       } else {
         // No hay objeto cerca - apagar foco
         digitalWrite(RELAY_PIN, LOW);
@@ -158,11 +179,14 @@ void loop() {
         static bool wasOn = false;
         if (wasOn) {
           Serial.println("💡 Foco APAGADO");
+          sendSensorEvent("Ultrasonico", "objeto_fuera_rango_foco_apagado", distance);
           wasOn = false;
         }
         if (distance > 0 && distance <= DISTANCE_THRESHOLD) {
           wasOn = true;
         }
+        static bool wasOffBefore = false;
+        wasOffBefore = true;
       }
     }
     
@@ -280,6 +304,43 @@ void capturePhoto() {
   esp_camera_fb_return(fb);
 }
 
+void capturePhotoAndSend() {
+  // Animación de flash: parpadeo rápido antes de la foto
+  for (int i = 0; i < 3; i++) {
+    digitalWrite(LED_FLASH_PIN, HIGH);
+    delay(80);
+    digitalWrite(LED_FLASH_PIN, LOW);
+    delay(80);
+  }
+  Serial.println("⚡ Animación de flash realizada");
+
+  // Encender LED flash para iluminar la escena
+  digitalWrite(LED_FLASH_PIN, HIGH);
+  Serial.println("⚡ Flash encendido");
+  delay(220); // Tiempo para que el LED ilumine bien la escena
+
+  // Capturar imagen
+  camera_fb_t *fb = esp_camera_fb_get();
+
+  // Apagar LED flash inmediatamente
+  digitalWrite(LED_FLASH_PIN, LOW);
+  Serial.println("⚡ Flash apagado");
+
+  if (!fb) {
+    Serial.println("❌ Error al capturar imagen");
+    sendSensorEvent("Camara", "error_captura_imagen");
+    return;
+  }
+
+  Serial.printf("✓ Imagen capturada: %d bytes (%dx%d)\n", fb->len, fb->width, fb->height);
+  
+  // Enviar foto a Firebase
+  sendPhotoToFirebase(fb);
+
+  // Liberar memoria del frame buffer
+  esp_camera_fb_return(fb);
+}
+
 float getDistance() {
   // Limpiar el pin trigger
   digitalWrite(TRIG_PIN, LOW);
@@ -318,4 +379,87 @@ void printLocalTime() {
                 timeinfo.tm_mday,
                 timeinfo.tm_mon + 1,
                 timeinfo.tm_year + 1900);
+}
+
+// ===========================
+// Funciones Firebase
+// ===========================
+String getTimestamp() {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    return String(millis());
+  }
+  char timestamp[30];
+  sprintf(timestamp, "%04d-%02d-%02d_%02d:%02d:%02d",
+          timeinfo.tm_year + 1900,
+          timeinfo.tm_mon + 1,
+          timeinfo.tm_mday,
+          timeinfo.tm_hour,
+          timeinfo.tm_min,
+          timeinfo.tm_sec);
+  return String(timestamp);
+}
+
+void sendToFirebase(String path, String jsonData) {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("❌ WiFi desconectado. No se puede enviar a Firebase.");
+    return;
+  }
+
+  HTTPClient http;
+  String url = String(firebaseHost) + path + ".json?auth=" + String(firebaseAuth);
+  
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+  
+  int httpResponseCode = http.POST(jsonData);
+  
+  if (httpResponseCode > 0) {
+    Serial.printf("✓ Datos enviados a Firebase: %d\n", httpResponseCode);
+  } else {
+    Serial.printf("❌ Error enviando a Firebase: %s\n", http.errorToString(httpResponseCode).c_str());
+  }
+  
+  http.end();
+}
+
+void sendPhotoToFirebase(camera_fb_t *fb) {
+  if (!fb) return;
+  
+  Serial.println("📤 Codificando imagen a Base64...");
+  String imageBase64 = base64::encode(fb->buf, fb->len);
+  
+  String timestamp = getTimestamp();
+  
+  // Crear JSON con la imagen y metadatos
+  String jsonData = "{";
+  jsonData += "\"device\":\"" + String(deviceId) + "\",";
+  jsonData += "\"timestamp\":\"" + timestamp + "\",";
+  jsonData += "\"type\":\"motion_detected\",";
+  jsonData += "\"width\":" + String(fb->width) + ",";
+  jsonData += "\"height\":" + String(fb->height) + ",";
+  jsonData += "\"size\":" + String(fb->len) + ",";
+  jsonData += "\"image\":\"" + imageBase64 + "\"";
+  jsonData += "}";
+  
+  Serial.printf("📦 Tamaño del JSON: %d bytes\n", jsonData.length());
+  sendToFirebase("/eventos/fotos", jsonData);
+}
+
+void sendSensorEvent(String sensorType, String event, float value) {
+  String timestamp = getTimestamp();
+  
+  String jsonData = "{";
+  jsonData += "\"device\":\"" + String(deviceId) + "\",";
+  jsonData += "\"timestamp\":\"" + timestamp + "\",";
+  jsonData += "\"sensor\":\"" + sensorType + "\",";
+  jsonData += "\"event\":\"" + event + "\"";
+  
+  if (value != 0) {
+    jsonData += ",\"value\":" + String(value, 2);
+  }
+  
+  jsonData += "}";
+  
+  sendToFirebase("/eventos/sensores", jsonData);
 }
