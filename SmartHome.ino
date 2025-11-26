@@ -13,7 +13,7 @@
 #define TRIG_PIN 14        // Pin Trigger del sensor ultrasónico
 #define ECHO_PIN 15        // Pin Echo del sensor ultrasónico
 #define RELAY_PIN 2        // Pin del relé para controlar el foco
-#define DISTANCE_THRESHOLD 100  // Distancia en cm para activar el foco (ajustable)
+#define DISTANCE_THRESHOLD 40  // Distancia en cm para activar el foco (ajustable)
 
 // ===========================
 // Configuración de la Fotorresistencia
