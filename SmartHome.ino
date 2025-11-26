@@ -1,5 +1,18 @@
 #include "esp_camera.h"
 #include "board_config.h"
+#include <WiFi.h>
+#include "time.h"
+
+// ===========================
+// Configuración WiFi
+// ===========================
+const char* ssid = "Totalplay-B7A2";        
+const char* password = "bza8g=M1eiAc0a1";     
+
+// Configuración de zona horaria
+const char* ntpServer = "pool.ntp.org";
+const long gmtOffset_sec = -21600;  // GMT-6 (México Centro)
+const int daylightOffset_sec = 0;   // Sin horario de verano
 
 // ===========================
 // Configuración del sensor PIR
@@ -30,6 +43,29 @@ void setup() {
   Serial.begin(115200);
   Serial.setDebugOutput(true);
   Serial.println("\n=== Smart Home Security Camera ===");
+
+  // Conectar a WiFi
+  Serial.println("\nConectando a WiFi...");
+  WiFi.begin(ssid, password);
+  int wifiAttempts = 0;
+  while (WiFi.status() != WL_CONNECTED && wifiAttempts < 20) {
+    delay(500);
+    Serial.print(".");
+    wifiAttempts++;
+  }
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\n✓ WiFi conectado");
+    Serial.print("IP: ");
+    Serial.println(WiFi.localIP());
+    
+    // Sincronizar RTC
+    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+    Serial.println("✓ RTC inicializado correctamente");
+    printLocalTime();
+  } else {
+    Serial.println("\n⚠ No se pudo conectar a WiFi");
+  }
 
   // Configurar pin del sensor PIR
   pinMode(PIR_SENSOR_PIN, INPUT);
@@ -74,7 +110,9 @@ void loop() {
     
     // Verificar que haya pasado suficiente tiempo desde la última captura
     if (currentTime - lastCaptureTime >= CAPTURE_INTERVAL) {
-      Serial.println("\n¡MOVIMIENTO DETECTADO! (LED IR encendido) Capturando foto...");
+      Serial.print("\n[");
+      printLocalTime();
+      Serial.println("] ¡MOVIMIENTO DETECTADO! (LED IR encendido) Capturando foto...");
       
       // Capturar foto con flash
       capturePhoto();
@@ -100,7 +138,9 @@ void loop() {
       digitalWrite(RELAY_PIN, LOW);
       static bool wasForcedOff = false;
       if (!wasForcedOff) {
-        Serial.println("☀️ Luz detectada (fotorresistencia) - Foco APAGADO");
+        Serial.print("[");
+        printLocalTime();
+        Serial.println("] ☀️ Luz detectada (fotorresistencia) - Foco APAGADO");
         wasForcedOff = true;
       }
     } else {
@@ -108,7 +148,9 @@ void loop() {
       if (distance > 0 && distance <= DISTANCE_THRESHOLD) {
         // Objeto detectado cerca - encender foco
         digitalWrite(RELAY_PIN, HIGH);
-        Serial.printf("💡 OBJETO DETECTADO a %.1f cm - Foco ENCENDIDO\n", distance);
+        Serial.print("[");
+        printLocalTime();
+        Serial.printf("] 💡 OBJETO DETECTADO a %.1f cm - Foco ENCENDIDO\n", distance);
       } else {
         // No hay objeto cerca - apagar foco
         digitalWrite(RELAY_PIN, LOW);
@@ -261,4 +303,19 @@ float getDistance() {
   float distance = duration * 0.0343 / 2;
   
   return distance;
+}
+
+void printLocalTime() {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    Serial.print("--:--:--");
+    return;
+  }
+  Serial.printf("%02d:%02d:%02d %02d/%02d/%04d", 
+                timeinfo.tm_hour, 
+                timeinfo.tm_min, 
+                timeinfo.tm_sec,
+                timeinfo.tm_mday,
+                timeinfo.tm_mon + 1,
+                timeinfo.tm_year + 1900);
 }
