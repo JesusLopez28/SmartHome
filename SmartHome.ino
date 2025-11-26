@@ -8,8 +8,8 @@
 // ===========================
 // Configuración WiFi
 // ===========================
-const char* ssid = "Totalplay-B7A2";        
-const char* password = "bza8g=M1eiAc0a1";
+const char* ssid = "ChuyExe";        
+const char* password = "Chuy2804";
 
 // ===========================
 // Configuración Firebase
@@ -35,7 +35,7 @@ const int daylightOffset_sec = 0;   // Sin horario de verano
 #define TRIG_PIN 14        // Pin Trigger del sensor ultrasónico
 #define ECHO_PIN 15        // Pin Echo del sensor ultrasónico
 #define RELAY_PIN 2        // Pin del relé para controlar el foco
-#define DISTANCE_THRESHOLD 40  // Distancia en cm para activar el foco (ajustable)
+#define DISTANCE_THRESHOLD 20  // Distancia en cm para activar el foco (ajustable)
 
 // ===========================
 // Configuración de la Fotorresistencia
