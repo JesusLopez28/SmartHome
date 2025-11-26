@@ -51,91 +51,105 @@ const unsigned long CAPTURE_INTERVAL = 3000; // 3 segundos entre capturas
 unsigned long lastUltrasonicCheck = 0;
 const unsigned long ULTRASONIC_CHECK_INTERVAL = 500; // Revisar cada 500ms
 
+// Variables de estado para el control del relé
+bool relayState = false; // Estado actual del relé (false = apagado, true = encendido)
+bool lightDetected = false; // Estado de la fotorresistencia
+
 void setup() {
   Serial.begin(115200);
   Serial.setDebugOutput(true);
-  Serial.println("\n=== Smart Home Security Camera ===");
+  Serial.println("\n╔════════════════════════════════════════╗");
+  Serial.println("║   SMART HOME SECURITY CAMERA v1.0    ║");
+  Serial.println("╚════════════════════════════════════════╝\n");
 
   // Conectar a WiFi
-  Serial.println("\nConectando a WiFi...");
+  Serial.println("┌─ Conectando a WiFi");
   WiFi.begin(ssid, password);
   int wifiAttempts = 0;
   while (WiFi.status() != WL_CONNECTED && wifiAttempts < 20) {
     delay(500);
-    Serial.print(".");
+    Serial.print("│ .");
     wifiAttempts++;
   }
+  Serial.println();
   
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\n✓ WiFi conectado");
-    Serial.print("IP: ");
+    Serial.println("└─ ✓ WiFi conectado exitosamente");
+    Serial.print("   IP: ");
     Serial.println(WiFi.localIP());
+    Serial.println();
     
     // Sincronizar RTC
+    Serial.println("┌─ Sincronizando reloj...");
     configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-    Serial.println("✓ RTC inicializado correctamente");
+    Serial.print("└─ ✓ Hora actual: ");
     printLocalTime();
+    Serial.println("\n");
   } else {
-    Serial.println("\n⚠ No se pudo conectar a WiFi");
+    Serial.println("└─ ⚠ ERROR: No se pudo conectar a WiFi\n");
   }
 
-  // Configurar pin del sensor PIR
+  // Configurar pines
+  Serial.println("┌─ Configurando sensores y actuadores:");
   pinMode(PIR_SENSOR_PIN, INPUT);
+  Serial.println("│  ✓ Sensor PIR configurado (GPIO 13)");
   
-  // Configurar pines del sensor ultrasónico
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
+  Serial.printf("│  ✓ Sensor Ultrasónico configurado (TRIG: GPIO %d, ECHO: GPIO %d)\n", TRIG_PIN, ECHO_PIN);
   
-  // Configurar pin del relé (inicialmente apagado)
   pinMode(RELAY_PIN, OUTPUT);
-  digitalWrite(RELAY_PIN, LOW); // LOW = relé apagado (foco apagado)
+  digitalWrite(RELAY_PIN, LOW);
+  Serial.printf("│  ✓ Relé configurado y apagado (GPIO %d)\n", RELAY_PIN);
   
-  // Configurar pin de la fotorresistencia
   pinMode(LDR_PIN, INPUT);
+  Serial.printf("│  ✓ Fotorresistencia configurada (GPIO %d)\n", LDR_PIN);
   
-  // Configurar LED flash (asegurarse que esté apagado)
   pinMode(LED_FLASH_PIN, OUTPUT);
-  digitalWrite(LED_FLASH_PIN, LOW); // LOW = apagado, HIGH = encendido
+  digitalWrite(LED_FLASH_PIN, LOW);
+  Serial.printf("│  ✓ LED Flash configurado (GPIO %d)\n", LED_FLASH_PIN);
+  Serial.println("└─ Sensores listos\n");
   
   // Pequeña pausa para estabilizar el sensor PIR
-  Serial.println("Esperando estabilización del sensor PIR (2 segundos)...");
+  Serial.println("⏳ Estabilizando sensor PIR (2 segundos)...");
   delay(2000);
 
   // Configurar cámara
+  Serial.println("┌─ Inicializando cámara...");
   if (!initCamera()) {
-    Serial.println("Error al inicializar la cámara");
+    Serial.println("└─ ❌ ERROR CRÍTICO: Fallo al inicializar cámara");
+    Serial.println("   Reiniciando sistema...\n");
     ESP.restart();
   }
+  Serial.println("└─ ✓ Cámara lista\n");
 
-  Serial.println("Sistema listo. Esperando detección de movimiento...");
-  Serial.printf("Sensor ultrasónico configurado. Distancia de activación: %d cm\n", DISTANCE_THRESHOLD);
+  Serial.println("╔════════════════════════════════════════╗");
+  Serial.println("║      SISTEMA INICIADO Y LISTO         ║");
+  Serial.println("╚════════════════════════════════════════╝");
+  Serial.printf("\n📍 Distancia de activación: %d cm\n", DISTANCE_THRESHOLD);
+  Serial.println("👁️  Esperando detección de movimiento...\n");
+  Serial.println("─────────────────────────────────────────\n");
 }
 
 void loop() {
   // Leer sensor PIR
   int pirState = digitalRead(PIR_SENSOR_PIN);
 
-  // Verificar si hay movimiento (LOW = movimiento detectado en tu sensor)
-  // Tu sensor funciona de manera invertida: LED IR encendido = movimiento = LOW
+  // Verificar si hay movimiento
   if (pirState == LOW) {
     unsigned long currentTime = millis();
     
-    // Verificar que haya pasado suficiente tiempo desde la última captura
     if (currentTime - lastCaptureTime >= CAPTURE_INTERVAL) {
-      Serial.print("\n[");
+      Serial.println("\n╔════════════════════════════════════════╗");
+      Serial.print("║  🚨 MOVIMIENTO DETECTADO - ");
       printLocalTime();
-      Serial.println("] ¡MOVIMIENTO DETECTADO! (LED IR encendido) Capturando foto...");
+      Serial.println("\n╚════════════════════════════════════════╝");
       
-      // Enviar evento de movimiento a Firebase
       sendSensorEvent("PIR", "movimiento_detectado");
-      
-      // Capturar foto con flash y enviar a Firebase
       capturePhotoAndSend();
       
-      // Actualizar tiempo de última captura
       lastCaptureTime = currentTime;
-      
-      // Pausa para evitar múltiples capturas seguidas
+      Serial.println("─────────────────────────────────────────\n");
       delay(500);
     }
   }
@@ -146,54 +160,58 @@ void loop() {
     float distance = getDistance();
     
     // Leer estado de la fotorresistencia
-    int ldrState = digitalRead(LDR_PIN);
+    int ldrValue = digitalRead(LDR_PIN);
+    bool currentLightDetected = (ldrValue == LOW);
     
-    // Si la fotorresistencia detecta luz (LOW), apagar el foco
-    if (ldrState == LOW) {
-      digitalWrite(RELAY_PIN, LOW);
-      static bool wasForcedOff = false;
-      if (!wasForcedOff) {
-        Serial.print("[");
-        printLocalTime();
-        Serial.println("] ☀️ Luz detectada (fotorresistencia) - Foco APAGADO");
-        sendSensorEvent("LDR", "luz_detectada_foco_apagado");
-        wasForcedOff = true;
-      }
-    } else {
-      // Si no hay luz ambiente, usar el sensor ultrasónico para controlar el foco
-      if (distance > 0 && distance <= DISTANCE_THRESHOLD) {
-        // Objeto detectado cerca - encender foco
-        static bool wasOffBefore = true;
-        if (wasOffBefore) {
-          digitalWrite(RELAY_PIN, HIGH);
-          Serial.print("[");
+    // Verificar cambio en estado de luz
+    if (currentLightDetected != lightDetected) {
+      lightDetected = currentLightDetected;
+      if (lightDetected) {
+        // Hay luz ambiente - forzar apagado del relé
+        if (relayState) {
+          digitalWrite(RELAY_PIN, LOW);
+          relayState = false;
+          Serial.println("\n┌─────────────────────────────────────────┐");
+          Serial.print("│ ☀️  LUZ DETECTADA - ");
           printLocalTime();
-          Serial.printf("] 💡 OBJETO DETECTADO a %.1f cm - Foco ENCENDIDO\n", distance);
-          sendSensorEvent("Ultrasonico", "objeto_detectado_foco_encendido", distance);
-          wasOffBefore = false;
+          Serial.println("\n│ 💡 Foco APAGADO (control automático)");
+          Serial.println("└─────────────────────────────────────────┘\n");
+          sendSensorEvent("LDR", "luz_detectada_foco_apagado");
         }
       } else {
-        // No hay objeto cerca - apagar foco
-        digitalWrite(RELAY_PIN, LOW);
-        // Solo imprimir cuando cambie el estado para no saturar el Serial
-        static bool wasOn = false;
-        if (wasOn) {
-          Serial.println("💡 Foco APAGADO");
+        Serial.println("\n🌙 Oscuridad detectada - Modo ultrasónico activado\n");
+      }
+    }
+    
+    // Si NO hay luz ambiente, usar el sensor ultrasónico
+    if (!lightDetected && distance > 0) {
+      bool shouldBeOn = (distance <= DISTANCE_THRESHOLD);
+      
+      // Solo cambiar estado si es diferente al actual
+      if (shouldBeOn != relayState) {
+        relayState = shouldBeOn;
+        digitalWrite(RELAY_PIN, relayState ? HIGH : LOW);
+        
+        Serial.println("\n┌─────────────────────────────────────────┐");
+        Serial.print("│ 📏 Distancia: ");
+        Serial.printf("%.1f cm - ", distance);
+        printLocalTime();
+        
+        if (relayState) {
+          Serial.println("\n│ 💡 Foco ENCENDIDO (objeto detectado)");
+          sendSensorEvent("Ultrasonico", "objeto_detectado_foco_encendido", distance);
+        } else {
+          Serial.println("\n│ 💡 Foco APAGADO (sin objeto cercano)");
           sendSensorEvent("Ultrasonico", "objeto_fuera_rango_foco_apagado", distance);
-          wasOn = false;
         }
-        if (distance > 0 && distance <= DISTANCE_THRESHOLD) {
-          wasOn = true;
-        }
-        static bool wasOffBefore = false;
-        wasOffBefore = true;
+        Serial.println("└─────────────────────────────────────────┘\n");
       }
     }
     
     lastUltrasonicCheck = currentTime;
   }
 
-  delay(100); // Pequeño delay para no saturar el loop
+  delay(100);
 }
 
 bool initCamera() {
@@ -272,72 +290,70 @@ bool initCamera() {
 }
 
 void capturePhoto() {
+  Serial.println("┌─ Preparando captura:");
   // Animación de flash: parpadeo rápido antes de la foto
+  Serial.print("│  ⚡ Flash: ");
   for (int i = 0; i < 3; i++) {
     digitalWrite(LED_FLASH_PIN, HIGH);
     delay(80);
     digitalWrite(LED_FLASH_PIN, LOW);
     delay(80);
+    Serial.print("💫 ");
   }
-  Serial.println("⚡ Animación de flash realizada");
+  Serial.println();
 
   // Encender LED flash para iluminar la escena
   digitalWrite(LED_FLASH_PIN, HIGH);
-  Serial.println("⚡ Flash encendido");
-  delay(220); // Tiempo para que el LED ilumine bien la escena
+  Serial.println("│  🔦 Iluminando escena...");
+  delay(220);
 
   // Capturar imagen
   camera_fb_t *fb = esp_camera_fb_get();
 
   // Apagar LED flash inmediatamente
   digitalWrite(LED_FLASH_PIN, LOW);
-  Serial.println("⚡ Flash apagado");
+  Serial.println("│  ⚡ Flash apagado");
 
   if (!fb) {
-    Serial.println("❌ Error al capturar imagen");
+    Serial.println("└─ ❌ ERROR: Fallo al capturar imagen\n");
     return;
   }
 
-  Serial.printf("✓ Imagen capturada: %d bytes (%dx%d)\n", fb->len, fb->width, fb->height);
-
-  // Liberar memoria del frame buffer
+  Serial.printf("└─ ✓ Captura exitosa: %d bytes (%dx%d)\n\n", fb->len, fb->width, fb->height);
   esp_camera_fb_return(fb);
 }
 
 void capturePhotoAndSend() {
-  // Animación de flash: parpadeo rápido antes de la foto
+  Serial.println("┌─ Iniciando captura con flash:");
+  // Animación de flash
+  Serial.print("│  ⚡ Animación: ");
   for (int i = 0; i < 3; i++) {
     digitalWrite(LED_FLASH_PIN, HIGH);
     delay(80);
     digitalWrite(LED_FLASH_PIN, LOW);
     delay(80);
+    Serial.print("💫 ");
   }
-  Serial.println("⚡ Animación de flash realizada");
+  Serial.println();
 
-  // Encender LED flash para iluminar la escena
   digitalWrite(LED_FLASH_PIN, HIGH);
-  Serial.println("⚡ Flash encendido");
-  delay(220); // Tiempo para que el LED ilumine bien la escena
+  Serial.println("│  🔦 Iluminando escena...");
+  delay(220);
 
-  // Capturar imagen
   camera_fb_t *fb = esp_camera_fb_get();
-
-  // Apagar LED flash inmediatamente
   digitalWrite(LED_FLASH_PIN, LOW);
-  Serial.println("⚡ Flash apagado");
+  Serial.println("│  ⚡ Flash apagado");
 
   if (!fb) {
-    Serial.println("❌ Error al capturar imagen");
+    Serial.println("└─ ❌ ERROR: Fallo en captura\n");
     sendSensorEvent("Camara", "error_captura_imagen");
     return;
   }
 
-  Serial.printf("✓ Imagen capturada: %d bytes (%dx%d)\n", fb->len, fb->width, fb->height);
+  Serial.printf("│  ✓ Imagen: %d bytes (%dx%d)\n", fb->len, fb->width, fb->height);
+  Serial.println("└─ Procesando...\n");
   
-  // Enviar foto a Firebase
   sendPhotoToFirebase(fb);
-
-  // Liberar memoria del frame buffer
   esp_camera_fb_return(fb);
 }
 
@@ -372,13 +388,10 @@ void printLocalTime() {
     Serial.print("--:--:--");
     return;
   }
-  Serial.printf("%02d:%02d:%02d %02d/%02d/%04d", 
+  Serial.printf("%02d:%02d:%02d", 
                 timeinfo.tm_hour, 
                 timeinfo.tm_min, 
-                timeinfo.tm_sec,
-                timeinfo.tm_mday,
-                timeinfo.tm_mon + 1,
-                timeinfo.tm_year + 1900);
+                timeinfo.tm_sec);
 }
 
 // ===========================
@@ -402,7 +415,7 @@ String getTimestamp() {
 
 void sendToFirebase(String path, String jsonData) {
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("❌ WiFi desconectado. No se puede enviar a Firebase.");
+    Serial.println("   ❌ WiFi desconectado. No se puede enviar a Firebase.");
     return;
   }
 
@@ -412,12 +425,13 @@ void sendToFirebase(String path, String jsonData) {
   http.begin(url);
   http.addHeader("Content-Type", "application/json");
   
+  Serial.println("┌─ Enviando a Firebase:");
   int httpResponseCode = http.POST(jsonData);
   
   if (httpResponseCode > 0) {
-    Serial.printf("✓ Datos enviados a Firebase: %d\n", httpResponseCode);
+    Serial.printf("└─ ✓ Respuesta: %d - Datos enviados correctamente\n\n", httpResponseCode);
   } else {
-    Serial.printf("❌ Error enviando a Firebase: %s\n", http.errorToString(httpResponseCode).c_str());
+    Serial.printf("└─ ❌ Error %d: %s\n\n", httpResponseCode, http.errorToString(httpResponseCode).c_str());
   }
   
   http.end();
@@ -426,12 +440,13 @@ void sendToFirebase(String path, String jsonData) {
 void sendPhotoToFirebase(camera_fb_t *fb) {
   if (!fb) return;
   
-  Serial.println("📤 Codificando imagen a Base64...");
+  Serial.println("┌─ Codificando imagen:");
+  Serial.print("│  📊 Procesando Base64");
   String imageBase64 = base64::encode(fb->buf, fb->len);
+  Serial.println(" ✓");
   
   String timestamp = getTimestamp();
   
-  // Crear JSON con la imagen y metadatos
   String jsonData = "{";
   jsonData += "\"device\":\"" + String(deviceId) + "\",";
   jsonData += "\"timestamp\":\"" + timestamp + "\",";
@@ -442,7 +457,8 @@ void sendPhotoToFirebase(camera_fb_t *fb) {
   jsonData += "\"image\":\"" + imageBase64 + "\"";
   jsonData += "}";
   
-  Serial.printf("📦 Tamaño del JSON: %d bytes\n", jsonData.length());
+  Serial.printf("│  📦 Tamaño JSON: %d bytes\n", jsonData.length());
+  Serial.println("└─ Listo para enviar\n");
   sendToFirebase("/eventos/fotos", jsonData);
 }
 
