@@ -4,6 +4,18 @@
 #include "time.h"
 #include <HTTPClient.h>
 #include "base64.h"
+#include <Wire.h>
+#include <Adafruit_SSD1306.h>
+
+// ===========================
+// Configuración de la pantalla OLED
+// ===========================
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET    -1
+#define OLED_SDA 26  // Pin SDA (puedes ajustar según tu conexión)
+#define OLED_SCL 27  // Pin SCL (puedes ajustar según tu conexión)
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 // ===========================
 // Configuración WiFi
@@ -44,6 +56,8 @@ const int daylightOffset_sec = 0;   // Sin horario de verano
 
 // Prototipo de función para evitar error de declaración
 void sendSensorEvent(String sensorType, String event, float value = 0);
+void displayTime();
+void displayEvent(String event, String detail = "");
 
 // Variables para evitar múltiples capturas
 unsigned long lastCaptureTime = 0;
@@ -61,6 +75,24 @@ void setup() {
   Serial.println("\n╔════════════════════════════════════════╗");
   Serial.println("║   SMART HOME SECURITY CAMERA v1.0    ║");
   Serial.println("╚════════════════════════════════════════╝\n");
+
+  // Inicializar pantalla OLED
+  Serial.println("┌─ Inicializando pantalla OLED");
+  Wire.begin(OLED_SDA, OLED_SCL);
+  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("└─ ❌ ERROR: No se encontró la pantalla OLED");
+  } else {
+    Serial.println("└─ ✓ Pantalla OLED inicializada");
+    display.clearDisplay();
+    display.setTextColor(SSD1306_WHITE);
+    display.setTextSize(1);
+    display.setCursor(0, 0);
+    display.println(F("Smart Home"));
+    display.println(F("Security System"));
+    display.println(F(""));
+    display.println(F("Iniciando..."));
+    display.display();
+  }
 
   // Conectar a WiFi
   Serial.println("┌─ Conectando a WiFi");
@@ -85,8 +117,21 @@ void setup() {
     Serial.print("└─ ✓ Hora actual: ");
     printLocalTime();
     Serial.println("\n");
+    
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setCursor(0, 0);
+    display.println(F("WiFi: Conectado"));
+    display.println(F("Hora: Sincronizada"));
+    display.display();
+    delay(2000);
   } else {
     Serial.println("└─ ⚠ ERROR: No se pudo conectar a WiFi\n");
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setCursor(0, 20);
+    display.println(F("Error: WiFi"));
+    display.display();
   }
 
   // Configurar pines
@@ -129,9 +174,15 @@ void setup() {
   Serial.printf("\n📍 Distancia de activación: %d cm\n", DISTANCE_THRESHOLD);
   Serial.println("👁️  Esperando detección de movimiento...\n");
   Serial.println("─────────────────────────────────────────\n");
+  
+  displayEvent("Sistema Listo", "Esperando...");
+  delay(2000);
 }
 
 void loop() {
+  // Mostrar hora continuamente
+  displayTime();
+  
   // Leer sensor PIR
   int pirState = digitalRead(PIR_SENSOR_PIN);
 
@@ -145,6 +196,7 @@ void loop() {
       printLocalTime();
       Serial.println("\n╚════════════════════════════════════════╝");
       
+      displayEvent("MOVIMIENTO!", "Capturando...");
       sendSensorEvent("PIR", "movimiento_detectado");
       capturePhotoAndSend();
       
@@ -177,9 +229,11 @@ void loop() {
           Serial.println("\n│ 💡 Foco APAGADO (control automático)");
           Serial.println("└─────────────────────────────────────────┘\n");
           sendSensorEvent("LDR", "luz_detectada_foco_apagado");
+          displayEvent("Luz detectada", "Foco apagado");
         }
       } else {
         Serial.println("\n🌙 Oscuridad detectada - Modo ultrasónico activado\n");
+        displayEvent("Oscuridad", "Modo automatico");
       }
     }
     
@@ -200,9 +254,11 @@ void loop() {
         if (relayState) {
           Serial.println("\n│ 💡 Foco ENCENDIDO (objeto detectado)");
           sendSensorEvent("Ultrasonico", "objeto_detectado_foco_encendido", distance);
+          displayEvent("Objeto cerca", String(distance, 1) + " cm");
         } else {
           Serial.println("\n│ 💡 Foco APAGADO (sin objeto cercano)");
           sendSensorEvent("Ultrasonico", "objeto_fuera_rango_foco_apagado", distance);
+          displayEvent("Sin objetos", "Foco apagado");
         }
         Serial.println("└─────────────────────────────────────────┘\n");
       }
@@ -478,4 +534,73 @@ void sendSensorEvent(String sensorType, String event, float value) {
   jsonData += "}";
   
   sendToFirebase("/eventos/sensores", jsonData);
+}
+
+// ===========================
+// Funciones de Pantalla OLED
+// ===========================
+void displayTime() {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) return;
+  
+  display.clearDisplay();
+  
+  // Mostrar Fecha
+  display.setTextSize(2);
+  display.setCursor(0, 15);
+  if(timeinfo.tm_mday < 10) display.print("0");
+  display.print(timeinfo.tm_mday);
+  display.print("/");
+  if(timeinfo.tm_mon + 1 < 10) display.print("0");
+  display.print(timeinfo.tm_mon + 1);
+  display.print("/");
+  display.print(timeinfo.tm_year + 1900);
+  
+  // Mostrar Hora
+  display.setTextSize(2);
+  display.setCursor(10, 45);
+  if(timeinfo.tm_hour < 10) display.print("0");
+  display.print(timeinfo.tm_hour);
+  display.print(":");
+  if(timeinfo.tm_min < 10) display.print("0");
+  display.print(timeinfo.tm_min);
+  display.print(":");
+  if(timeinfo.tm_sec < 10) display.print("0");
+  display.print(timeinfo.tm_sec);
+  
+  display.display();
+}
+
+void displayEvent(String event, String detail) {
+  display.clearDisplay();
+  
+  // Mostrar evento principal
+  display.setTextSize(2);
+  display.setCursor(0, 10);
+  display.println(event);
+  
+  // Mostrar detalle
+  if (detail.length() > 0) {
+    display.setTextSize(1);
+    display.setCursor(0, 35);
+    display.println(detail);
+  }
+  
+  // Mostrar hora pequeña
+  struct tm timeinfo;
+  if (getLocalTime(&timeinfo)) {
+    display.setTextSize(1);
+    display.setCursor(0, 55);
+    if(timeinfo.tm_hour < 10) display.print("0");
+    display.print(timeinfo.tm_hour);
+    display.print(":");
+    if(timeinfo.tm_min < 10) display.print("0");
+    display.print(timeinfo.tm_min);
+    display.print(":");
+    if(timeinfo.tm_sec < 10) display.print("0");
+    display.print(timeinfo.tm_sec);
+  }
+  
+  display.display();
+  delay(3000); // Mostrar evento por 3 segundos
 }
